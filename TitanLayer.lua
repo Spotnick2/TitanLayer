@@ -11,21 +11,36 @@ local TITAN_LAYER_ID = "Layer"
 local TITAN_BUTTON = "TitanPanel" .. TITAN_LAYER_ID .. "Button"
 
 local ADDON_NAME = "TitanLayer"
-local VERSION = "1.0.0"
+local VERSION = "1.1.0"
 
 -- ******************************** Variables *******************************
-local currentLayerNum = 0
 local currentZoneID = 0
-local knownLayers = {}       -- { [zoneID] = true } for the current session
-local sortedLayers = {}      -- sorted list of known zoneIDs for consistent numbering
-local lastJoinedGroup = 0
-local lastZoneChange = 0
+local currentMapID = nil
+local knownLayers = {}       -- sightings on the player's current map
+local sortedLayers = {}      -- sorted zoneIDs on that map
+local realmMaps = {}         -- { [uiMapID] = { [zoneID] = lastSeen } }
 local layerExpireTime = 7200 -- 2 hours, layers reset on server restarts
 
 -- Companion/pet creature NPC IDs to ignore (common ones that travel with the player)
 local ignoredCreatures = {}
 
 -- ******************************** Utility *********************************
+
+-- Secret values cannot be compared or converted by addon Lua.
+local function Plain(value)
+    if issecretvalue and issecretvalue(value) then return nil end
+    return value
+end
+
+local function LiveMap()
+    local mapID = C_Map and C_Map.GetBestMapForUnit and Plain(C_Map.GetBestMapForUnit("player"))
+    return type(mapID) == "number" and mapID or nil
+end
+
+local function ServerTime()
+    local now = Plain(GetServerTime())
+    return type(now) == "number" and now or nil
+end
 
 --- Sort the known layers table and rebuild the sorted index.
 local function RebuildSortedLayers()
@@ -48,26 +63,53 @@ local function GetLayerNumForZoneID(zoneID)
     return 0
 end
 
+local function SelectMap(mapID)
+    if mapID == currentMapID then return end
+    currentMapID = mapID
+    currentZoneID = 0
+    knownLayers = mapID and realmMaps[mapID] or {}
+    RebuildSortedLayers()
+end
+
+local function CurrentLayer()
+    local mapID = LiveMap()
+    if not mapID then return 0 end
+    SelectMap(mapID)
+    local now = ServerTime()
+    if not now then return 0 end
+    local changed = false
+    for id, seen in pairs(knownLayers) do
+        if now - seen >= layerExpireTime then
+            knownLayers[id] = nil
+            changed = true
+        end
+    end
+    if changed then RebuildSortedLayers() end
+    return GetLayerNumForZoneID(currentZoneID)
+end
+
 --- Try to read the layer from NovaWorldBuffs if it is loaded.
 ---@return number|nil layerNum from NWB, or nil if unavailable
 local function GetNWBLayer()
-    if NWB_CurrentLayer and NWB_CurrentLayer > 0 then
-        return NWB_CurrentLayer
+    local layer = Plain(NWB_CurrentLayer)
+    if type(layer) == "number" and layer > 0 then
+        return layer
     end
-    if NWB and NWB.currentLayer and NWB.currentLayer > 0 then
-        return NWB.currentLayer
+    layer = NWB and Plain(NWB.currentLayer)
+    if type(layer) == "number" and layer > 0 then
+        return layer
     end
     return nil
 end
 
 --- Parse a unit's GUID and extract the zoneID (server instance ID).
---- Creature GUIDs look like: "Creature-0-ZONEID-0-0-NPCID-SPAWNUID"
+--- Creature GUIDs look like: "Creature-0-SERVER-INSTANCE-ZONE-NPC-SPAWN"
 ---@param unit string
 ---@return number|nil zoneID
 ---@return boolean isCreature
 local function GetZoneIDFromUnit(unit)
-    local guid = UnitGUID(unit)
-    if not guid then
+    local guid = Plain(UnitGUID(unit))
+    if type(guid) ~= "string" then
         return nil, false
     end
 
@@ -86,32 +128,87 @@ end
 
 --- Process a unit to detect/update layer info.
 ---@param unit string
-local function ProcessUnit(unit)
-    if UnitOnTaxi("player") or IsInInstance() then
+local function ProcessUnit(unit, confirmOnly)
+    unit = Plain(unit)
+    if type(unit) ~= "string" then return end
+    if Plain(UnitOnTaxi("player")) == true or Plain(IsInInstance()) == true then
         return
     end
 
     local zoneID, isCreature = GetZoneIDFromUnit(unit)
-    if not zoneID or not isCreature then
+    local mapID = LiveMap()
+    local now = ServerTime()
+    if not zoneID or not isCreature or not mapID or not now then
         return
     end
 
-    -- Register this zoneID if we haven't seen it
-    if not knownLayers[zoneID] then
-        knownLayers[zoneID] = GetServerTime()
-        RebuildSortedLayers()
-
-        -- Persist to saved variables
-        if TitanLayerDB and TitanLayerDB.layers then
-            TitanLayerDB.layers[zoneID] = GetServerTime()
+    SelectMap(mapID)
+    local wasKnown = knownLayers[zoneID] and now - knownLayers[zoneID] < layerExpireTime
+    if not wasKnown then
+        -- Nameplates can belong to the map across a border. A target or
+        -- mouseover can add a new ID unless another map already owns it.
+        if confirmOnly then return end
+        for otherMap, ids in pairs(realmMaps) do
+            if otherMap ~= mapID and ids[zoneID] and now - ids[zoneID] < layerExpireTime then
+                return
+            end
         end
     end
 
-    currentZoneID = zoneID
-    currentLayerNum = GetLayerNumForZoneID(zoneID)
+    if not realmMaps[mapID] then
+        realmMaps[mapID] = {}
+        knownLayers = realmMaps[mapID]
+    end
+    knownLayers[zoneID] = now
+    for id, seen in pairs(knownLayers) do
+        if type(seen) ~= "number" or now - seen >= layerExpireTime then
+            knownLayers[id] = nil
+        end
+    end
+    RebuildSortedLayers()
 
+    currentZoneID = zoneID
     -- Update the Titan button
     TitanPanelButton_UpdateButton(TITAN_LAYER_ID)
+    return true
+end
+
+local function RescanUnits()
+    if ProcessUnit("target") or ProcessUnit("mouseover") then return end
+    if TitanGetVar(TITAN_LAYER_ID, "ScanNameplates") then
+        for i = 1, 40 do
+            if ProcessUnit("nameplate" .. i, true) then return end
+        end
+    end
+end
+
+local function LoadSavedLayers()
+    local db = type(TitanLayerDB) == "table" and TitanLayerDB or {}
+    local saved = type(db.realms) == "table" and db.realms or {}
+    local realm = Plain(GetRealmName())
+    if type(realm) ~= "string" then realm = "?" end
+    local now = ServerTime()
+    local clean = {}
+    local maps = type(saved[realm]) == "table" and saved[realm] or {}
+    for mapID, ids in pairs(maps) do
+        if type(mapID) == "number" and type(ids) == "table" then
+            for zoneID, seen in pairs(ids) do
+                if type(zoneID) == "number" and type(seen) == "number"
+                    and (not now or now - seen < layerExpireTime) then
+                    clean[mapID] = clean[mapID] or {}
+                    clean[mapID][zoneID] = seen
+                end
+            end
+        end
+    end
+    -- The old flat list has no realm or map, so it cannot be ranked safely.
+    db.layers = nil
+    saved[realm] = clean
+    db.realms = saved
+    TitanLayerDB = db
+    realmMaps = clean
+    currentMapID = nil
+    SelectMap(LiveMap())
 end
 
 -- ******************************** NWB Passive Listener ********************
@@ -130,6 +227,16 @@ local nwbListenerReady = (libDeflate ~= nil and libSerialize ~= nil)
 local nwbGuildLayers = {}     -- { [playerName] = layerNum }
 local nwbMaxLayer = 0         -- highest layer number seen from NWB comms
 local nwbLayerCounts = {}     -- { [layerNum] = count } how many guildies per layer
+
+local function ResetLayers()
+    wipe(realmMaps)
+    currentMapID = nil
+    SelectMap(LiveMap())
+    wipe(nwbGuildLayers)
+    wipe(nwbLayerCounts)
+    nwbMaxLayer = 0
+    TitanPanelButton_UpdateButton(TITAN_LAYER_ID)
+end
 
 -- AceComm multi-part reassembly buffer
 local multipartSpool = {}     -- { [key] = string or {string, string, ...} }
@@ -305,26 +412,21 @@ end
 ---@return string label
 ---@return string value
 local function GetButtonText(id)
-    local layerNum = 0
+    local layerNum = CurrentLayer()
     local useNWB = TitanGetVar(TITAN_LAYER_ID, "PreferNWB")
 
-    -- Try NWB first if user wants it
     if useNWB then
         local nwbLayer = GetNWBLayer()
         if nwbLayer then
             layerNum = nwbLayer
-        else
-            layerNum = currentLayerNum
         end
-    else
-        layerNum = currentLayerNum
     end
 
     local text
     if layerNum > 0 then
         local display = tostring(layerNum)
         -- Show "X/Y" if we know total layers from NWB comms
-        if nwbMaxLayer > 0 then
+        if useNWB and GetNWBLayer() and nwbMaxLayer > 0 then
             display = display .. "/" .. nwbMaxLayer
         end
         text = TitanUtils_GetHighlightText(display)
@@ -345,7 +447,7 @@ local function GetTooltipText()
     local text = ""
 
     -- Current layer
-    local layerNum = currentLayerNum
+    local layerNum = CurrentLayer()
     local nwbLayer = GetNWBLayer()
     local useNWB = TitanGetVar(TITAN_LAYER_ID, "PreferNWB")
 
@@ -355,7 +457,7 @@ local function GetTooltipText()
 
     if layerNum > 0 then
         local layerDisplay = tostring(layerNum)
-        if nwbMaxLayer > 0 then
+        if useNWB and nwbLayer and nwbMaxLayer > 0 then
             layerDisplay = layerDisplay .. " of " .. nwbMaxLayer
         end
         text = text .. TitanUtils_GetNormalText("Current Layer: ")
@@ -366,7 +468,7 @@ local function GetTooltipText()
     end
 
     -- Zone ID info
-    if TitanGetVar(TITAN_LAYER_ID, "ShowZoneID") and currentZoneID > 0 then
+    if TitanGetVar(TITAN_LAYER_ID, "ShowZoneID") and CurrentLayer() > 0 then
         text = text .. "\n" .. TitanUtils_GetNormalText("Zone ID: ")
             .. TitanUtils_GetHighlightText(tostring(currentZoneID))
     end
@@ -381,7 +483,7 @@ local function GetTooltipText()
         for i = 1, nwbMaxLayer do
             local count = nwbLayerCounts[i] or 0
             local marker = ""
-            if layerNum == i then
+            if nwbLayer == i then
                 marker = " |cff00ff00<-- You|r"
             end
             text = text .. "\n  " .. TitanUtils_GetHighlightText("Layer " .. i)
@@ -390,7 +492,7 @@ local function GetTooltipText()
         text = text .. "\n  |cff989898" .. totalTracked .. " guild members tracked|r"
     elseif #sortedLayers > 0 then
         -- Fallback: show our own GUID-detected layers
-        text = text .. "\n\n" .. TitanUtils_GetNormalText("Known Layers This Session:")
+        text = text .. "\n\n" .. TitanUtils_GetNormalText("Known Layers On This Map:")
         for i, zoneID in ipairs(sortedLayers) do
             local marker = ""
             if zoneID == currentZoneID then
@@ -415,6 +517,7 @@ local function GetTooltipText()
 
     -- Hint
     text = text .. "\n\n" .. TitanUtils_GetGreenText("Target any NPC to detect your layer.")
+    text = text .. "\n|cff989898GUID layer numbers are local to your sightings on this map.|r"
     text = text .. "\n" .. TitanUtils_GetGreenText("Left-click to announce layer in chat.")
 
     return text
@@ -425,8 +528,15 @@ end
 ---@param event string
 ---@param ... any
 local function OnEvent(self, event, ...)
-    if event == "PLAYER_ENTERING_WORLD" then
-        lastZoneChange = GetServerTime()
+    if event == "ADDON_LOADED" then
+        if ... ~= ADDON_NAME then return end
+        LoadSavedLayers()
+        self:UnregisterEvent("ADDON_LOADED")
+        TitanPanelButton_UpdateButton(TITAN_LAYER_ID)
+
+    elseif event == "PLAYER_ENTERING_WORLD" or event == "PLAYER_REGEN_ENABLED"
+        or event == "PLAYER_CONTROL_GAINED" then
+        RescanUnits()
         TitanPanelButton_UpdateButton(TITAN_LAYER_ID)
 
     elseif event == "PLAYER_TARGET_CHANGED" then
@@ -437,26 +547,36 @@ local function OnEvent(self, event, ...)
 
     elseif event == "NAME_PLATE_UNIT_ADDED" then
         local unitID = ...
-        if unitID then
-            ProcessUnit(unitID)
-        end
+        ProcessUnit(unitID, true)
 
     elseif event == "GROUP_JOINED" or event == "GROUP_LEFT" then
-        lastJoinedGroup = GetServerTime()
-        -- Reset current layer on group change (may have changed layer)
-        currentLayerNum = 0
+        -- The layer hop can occur after the group event.
         currentZoneID = 0
         TitanPanelButton_UpdateButton(TITAN_LAYER_ID)
+        for _, delay in ipairs({ 5, 15, 30 }) do
+            C_Timer.After(delay, function()
+                currentZoneID = 0
+                RescanUnits()
+                TitanPanelButton_UpdateButton(TITAN_LAYER_ID)
+            end)
+        end
 
     elseif event == "ZONE_CHANGED_NEW_AREA" then
-        lastZoneChange = GetServerTime()
-        -- Don't reset layer, it may still be valid, but trigger an update
+        currentZoneID = 0
+        SelectMap(LiveMap())
+        RescanUnits()
         TitanPanelButton_UpdateButton(TITAN_LAYER_ID)
+
+    elseif event == "ZONE_CHANGED" or event == "ZONE_CHANGED_INDOORS" then
+        if LiveMap() ~= currentMapID then
+            SelectMap(LiveMap())
+            RescanUnits()
+            TitanPanelButton_UpdateButton(TITAN_LAYER_ID)
+        end
 
     elseif event == "UNIT_PHASE" then
         local unit = ...
-        if UnitIsGroupLeader(unit) then
-            currentLayerNum = 0
+        if Plain(unit) == "player" then
             currentZoneID = 0
             TitanPanelButton_UpdateButton(TITAN_LAYER_ID)
         end
@@ -474,7 +594,7 @@ end
 ---@param button string
 local function OnClick(self, button)
     if button == "LeftButton" then
-        local layerNum = currentLayerNum
+        local layerNum = CurrentLayer()
         local useNWB = TitanGetVar(TITAN_LAYER_ID, "PreferNWB")
         if useNWB then
             local nwbLayer = GetNWBLayer()
@@ -485,7 +605,7 @@ local function OnClick(self, button)
 
         if layerNum > 0 then
             local msg = "Currently on Layer " .. layerNum
-            if currentZoneID > 0 and TitanGetVar(TITAN_LAYER_ID, "ShowZoneID") then
+            if CurrentLayer() > 0 and TitanGetVar(TITAN_LAYER_ID, "ShowZoneID") then
                 msg = msg .. " (ID: " .. currentZoneID .. ")"
             end
 
@@ -589,18 +709,8 @@ local function PrepareMenu()
         info = {}
         info.text = "|cffff6666Reset Layer Data|r"
         info.func = function()
-            wipe(knownLayers)
-            wipe(sortedLayers)
-            wipe(nwbGuildLayers)
-            wipe(nwbLayerCounts)
-            nwbMaxLayer = 0
-            currentLayerNum = 0
-            currentZoneID = 0
-            if TitanLayerDB then
-                wipe(TitanLayerDB.layers)
-            end
-            TitanPanelButton_UpdateButton(TITAN_LAYER_ID)
-            print("|cff33ff99TitanLayer:|r All layer data has been reset.")
+            ResetLayers()
+            print("|cff33ff99TitanLayer:|r This realm's layer data has been reset.")
         end
         info.notCheckable = true
         TitanPanelRightClickMenu_AddButton(info, level)
@@ -625,14 +735,14 @@ local function OnLoad(self)
         icon = "Interface\\Icons\\INV_Misc_Map_01",
         iconWidth = 16,
         notes = "Displays your current server layer on Titan Panel.\n"
-            .. "- Detects layers automatically via NPC GUIDs (target, mouseover, nameplates).\n"
+            .. "- Detects layers from target and mouseover NPC GUIDs; nameplates confirm known IDs.\n"
             .. "- Passively listens to NovaWorldBuffs guild comms for total layer count.\n"
-            .. "- Shows Layer X/Y on bar when guild layer data is available.\n"
+            .. "- Shows Layer X/Y when using NWB's layer number and guild data is available.\n"
             .. "- Left-click to announce your current layer in chat.\n"
             .. "- Right-click to configure announce channel and display options.\n"
-            .. "- Layer data persists across reloads and expires after 2 hours.\n"
+            .. "- Layer sightings are scoped to your realm and map, and expire after 2 hours.\n"
             .. "- Use /titanlayer or /tlayer to print current layer info.\n"
-            .. "- Use /titanlayer reset to clear all stored layer data.",
+            .. "- Use /titanlayer reset to clear this realm's stored layer data.",
         controlVariables = {
             ShowIcon = true,
             ShowLabelText = true,
@@ -651,30 +761,12 @@ local function OnLoad(self)
         },
     }
 
-    -- Initialize saved variables
-    if not TitanLayerDB then
-        TitanLayerDB = { layers = {} }
-    end
-    if not TitanLayerDB.layers then
-        TitanLayerDB.layers = {}
-    end
-
-    -- Load persisted layers (prune expired ones)
-    local now = GetServerTime()
-    for zoneID, timestamp in pairs(TitanLayerDB.layers) do
-        if (now - timestamp) < layerExpireTime then
-            knownLayers[zoneID] = timestamp
-        else
-            TitanLayerDB.layers[zoneID] = nil
-        end
-    end
-    RebuildSortedLayers()
-
     -- Register NWB addon message prefix for passive listening
     if nwbListenerReady then
         C_ChatInfo.RegisterAddonMessagePrefix(NWB_PREFIX)
     end
 
+    self:RegisterEvent("ADDON_LOADED")
     self:RegisterEvent("PLAYER_ENTERING_WORLD")
 end
 
@@ -686,6 +778,10 @@ local function OnShow(self)
     self:RegisterEvent("GROUP_JOINED")
     self:RegisterEvent("GROUP_LEFT")
     self:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+    self:RegisterEvent("ZONE_CHANGED")
+    self:RegisterEvent("ZONE_CHANGED_INDOORS")
+    self:RegisterEvent("PLAYER_REGEN_ENABLED")
+    self:RegisterEvent("PLAYER_CONTROL_GAINED")
     self:RegisterEvent("UNIT_PHASE")
 
     if nwbListenerReady then
@@ -707,6 +803,10 @@ local function OnHide(self)
     self:UnregisterEvent("GROUP_JOINED")
     self:UnregisterEvent("GROUP_LEFT")
     self:UnregisterEvent("ZONE_CHANGED_NEW_AREA")
+    self:UnregisterEvent("ZONE_CHANGED")
+    self:UnregisterEvent("ZONE_CHANGED_INDOORS")
+    self:UnregisterEvent("PLAYER_REGEN_ENABLED")
+    self:UnregisterEvent("PLAYER_CONTROL_GAINED")
     self:UnregisterEvent("UNIT_PHASE")
     self:UnregisterEvent("NAME_PLATE_UNIT_ADDED")
     self:UnregisterEvent("CHAT_MSG_ADDON")
@@ -749,23 +849,13 @@ SLASH_TITANLAYER2 = "/tlayer"
 SlashCmdList["TITANLAYER"] = function(msg)
     msg = string.lower(msg or "")
     if msg == "reset" then
-        wipe(knownLayers)
-        wipe(sortedLayers)
-        wipe(nwbGuildLayers)
-        wipe(nwbLayerCounts)
-        nwbMaxLayer = 0
-        currentLayerNum = 0
-        currentZoneID = 0
-        if TitanLayerDB then
-            wipe(TitanLayerDB.layers)
-        end
-        TitanPanelButton_UpdateButton(TITAN_LAYER_ID)
-        print("|cff33ff99TitanLayer:|r All layer data has been reset.")
+        ResetLayers()
+        print("|cff33ff99TitanLayer:|r This realm's layer data has been reset.")
     else
-        local layerNum = currentLayerNum
+        local layerNum = CurrentLayer()
         if layerNum > 0 then
             local display = "Layer " .. layerNum
-            if nwbMaxLayer > 0 then
+            if TitanGetVar(TITAN_LAYER_ID, "PreferNWB") and GetNWBLayer() and nwbMaxLayer > 0 then
                 display = display .. " of " .. nwbMaxLayer
             end
             print("|cff33ff99TitanLayer:|r You are on " .. display
@@ -773,7 +863,7 @@ SlashCmdList["TITANLAYER"] = function(msg)
         else
             print("|cff33ff99TitanLayer:|r Layer not yet detected. Target any NPC!")
         end
-        print("|cff33ff99TitanLayer:|r GUID-detected layers: " .. #sortedLayers)
+        print("|cff33ff99TitanLayer:|r GUID-detected layers on this map: " .. #sortedLayers)
         if nwbListenerReady then
             local tracked = 0
             for _ in pairs(nwbGuildLayers) do tracked = tracked + 1 end
