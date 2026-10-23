@@ -1,6 +1,6 @@
 # TitanLayer
 
-TitanLayer is a lightweight Titan Panel plugin that displays the layer you have observed on a layered World of Warcraft realm. Version 1.1.0 includes a port for **World of Warcraft: Forever** (`Interface 16001`).
+TitanLayer is a lightweight Titan Panel plugin that displays the layer you have observed on a layered World of Warcraft realm. Version 1.1.1 supports **World of Warcraft: Forever** (`Interface 16001`).
 
 ## Install
 
@@ -32,6 +32,6 @@ Right-click the TitanLayer button to choose the announcement channel, show the G
 
 ## Compatibility notes
 
-The TOC also lists interface numbers for several other WoW clients. A realm must expose readable creature GUIDs and use layers for detection to be useful. Wrath Classic is **not** listed in the 1.1.0 TOC, so compatibility with it is not claimed here.
+The TOC also lists interface numbers for several other WoW clients. A realm must expose readable creature GUIDs and use layers for detection to be useful. Wrath Classic is **not** listed in the current TOC, so compatibility with it is not claimed here.
 
 Version 1.1.0 replaces the older flat saved-sighting list with realm-and-map storage. Older sightings are cleared on upgrade because they cannot be assigned safely to a map. The Forever port passed Lua 5.1 syntax and offline behavior checks, but it has not been verified in the Forever client.

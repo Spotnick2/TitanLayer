@@ -1,8 +1,8 @@
 ## Interface: 16001, 120001, 120000, 110207, 50503, 40402, 20505, 11508
-## Title: Titan Panel [|cffeda55fLayer|r] |cff00aa001.1.0|r
-## Version: 1.1.0
+## Title: Titan Panel [|cffeda55fLayer|r] |cff00aa001.1.1|r
+## Version: 1.1.1
 ## IconTexture: Interface\Icons\INV_Misc_Map_01
-## Notes: Displays your current server layer on Titan Panel. Detects layers via NPC GUIDs and passively listens to NovaWorldBuffs guild comms for total layer count. NWB not required - just needs guildies running it.
+## Notes: Displays your observed layer on Titan Panel using NPC GUIDs, with optional NovaWorldBuffs guild reports.
 ## Author: Spotnick
 ## SavedVariables: TitanLayerDB
 ## Dependencies: Titan

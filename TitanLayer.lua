@@ -11,7 +11,7 @@ local TITAN_LAYER_ID = "Layer"
 local TITAN_BUTTON = "TitanPanel" .. TITAN_LAYER_ID .. "Button"
 
 local ADDON_NAME = "TitanLayer"
-local VERSION = "1.1.0"
+local VERSION = "1.1.1"
 
 -- ******************************** Variables *******************************
 local currentZoneID = 0
