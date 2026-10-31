@@ -34,4 +34,6 @@ Right-click the TitanLayer button to choose the announcement channel, show the G
 
 The TOC also lists interface numbers for several other WoW clients. A realm must expose readable creature GUIDs and use layers for detection to be useful. Wrath Classic is **not** listed in the current TOC, so compatibility with it is not claimed here.
 
+The NovaWorldBuffs listener is bounded: a guild message over 4 KB is ignored before it is decoded (a layer report is far smaller; NovaWorldBuffs' large data broadcasts carry nothing TitanLayer reads), a half-received message is forgotten after a minute, and only a whole number from 0 to 50 counts as a layer. `docs/AUDIT.md` has the audit; `tests/nwb.lua` runs it offline.
+
 Version 1.1.0 replaces the older flat saved-sighting list with realm-and-map storage. Older sightings are cleared on upgrade because they cannot be assigned safely to a map. The Forever port passed Lua 5.1 syntax and offline behavior checks, but it has not been verified in the Forever client.
