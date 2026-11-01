@@ -238,51 +238,66 @@ local function ResetLayers()
     TitanPanelButton_UpdateButton(TITAN_LAYER_ID)
 end
 
--- AceComm multi-part reassembly buffer
-local multipartSpool = {}     -- { [key] = string or {string, string, ...} }
+-- AceComm multi-part reassembly buffer, bounded (audit, #1): per sender, the
+-- parts so far, their size and when the message started.
+-- * A message over NWB_MAX_BYTES of encoded bytes, in any framing (single,
+--   escaped or multi-part), is dropped before anything is decoded: LibDeflate
+--   has no limit on what it inflates, so what we accept is the only bound. A
+--   layer report is a short string; NWB's large data broadcasts on the same
+--   prefix fall to this, which costs nothing TitanLayer reads.
+-- * A partial message older than NWB_SPOOL_TTL seconds is dropped at the next
+--   NWB message, so a sender who never finishes retains nothing for long.
+local NWB_MAX_BYTES = 4096
+local NWB_SPOOL_TTL = 60
+local multipartSpool = {}     -- { [key] = { parts = {...}, size = n, at = GetTime() } }
+
+local function DropStaleSpools()
+    local now = GetTime()
+    for key, spool in pairs(multipartSpool) do
+        if now - spool.at > NWB_SPOOL_TTL then multipartSpool[key] = nil end
+    end
+end
 
 --- Reassemble AceComm multi-part messages.
 --- AceComm framing: \001 = first, \002 = next, \003 = last, \004 = escape, no prefix = single.
 ---@param message string raw addon message
 ---@param distribution string
 ---@param sender string
----@return string|nil complete Complete message if ready, nil if still assembling
+---@return string|nil complete Complete message if ready, nil if still assembling or refused
 local function HandleAceCommFraming(message, distribution, sender)
     local control, rest = string.match(message, "^([\001-\009])(.*)")
     if not control then
         -- Single-part message, complete
+        if #message > NWB_MAX_BYTES then return nil end
         return message
     end
 
     local key = NWB_PREFIX .. "\t" .. distribution .. "\t" .. sender
+    if #rest > NWB_MAX_BYTES then
+        -- Over the budget on its own: whatever it belongs to goes with it.
+        multipartSpool[key] = nil
+        return nil
+    end
 
     if control == "\001" then
         -- First part
-        multipartSpool[key] = rest
+        multipartSpool[key] = { parts = { rest }, size = #rest, at = GetTime() }
         return nil
-    elseif control == "\002" then
-        -- Middle part
-        local old = multipartSpool[key]
-        if not old then return nil end
-        if type(old) ~= "table" then
-            multipartSpool[key] = { old, rest }
-        else
-            table.insert(old, rest)
+    elseif control == "\002" or control == "\003" then
+        -- Middle or last part
+        local spool = multipartSpool[key]
+        if not spool then return nil end
+        spool.size = spool.size + #rest
+        if spool.size > NWB_MAX_BYTES then
+            multipartSpool[key] = nil
+            return nil
         end
-        return nil
-    elseif control == "\003" then
-        -- Last part
-        local old = multipartSpool[key]
+        spool.parts[#spool.parts + 1] = rest
+        if control == "\002" then return nil end
         multipartSpool[key] = nil
-        if not old then return nil end
-        if type(old) == "table" then
-            table.insert(old, rest)
-            return table.concat(old)
-        else
-            return old .. rest
-        end
+        return table.concat(spool.parts)
     elseif control == "\004" then
-        -- Escape: strip control, rest is full message
+        -- Escape: strip control, rest is full message (within the budget)
         return rest
     end
 
@@ -352,7 +367,8 @@ end
 --- Process a decoded NWB message and extract layer info.
 ---@param deserialized string
 ---@param sender string
-local function ProcessNWBMessage(deserialized, sender)
+---@param realm string the player's normalized realm name (read by the caller)
+local function ProcessNWBMessage(deserialized, sender, realm)
     if type(deserialized) ~= "string" then return end
 
     local args = Explode(" ", deserialized, 4)
@@ -362,12 +378,16 @@ local function ProcessNWBMessage(deserialized, sender)
     local _, layerStr = strsplit("-", args[3], 2)
     if not layerStr then return end
 
+    -- An integer 0..50, checked before it's stored (audit, #1): a NaN (what
+    -- tonumber("nan") gives on a C99 runtime) passes both range comparisons
+    -- and would throw as a table key in the rebuild below, after being
+    -- stored, so every later message would throw too; a fraction is no layer.
     local layerNum = tonumber(layerStr)
-    if not layerNum or layerNum < 0 or layerNum > 50 then return end
+    if not layerNum or layerNum % 1 ~= 0 or layerNum < 0 or layerNum > 50 then return end
 
     -- Normalize sender name
     if not string.match(sender, "-") then
-        sender = sender .. "-" .. GetNormalizedRealmName()
+        sender = sender .. "-" .. realm
     end
 
     if layerNum == 0 then
@@ -386,11 +406,15 @@ end
 ---@param distribution string
 ---@param sender string
 local function OnNWBAddonMessage(message, distribution, sender)
+    DropStaleSpools()   -- at every NWB message, before anything is skipped
     if distribution ~= "GUILD" then return end
+    if type(message) ~= "string" or type(sender) ~= "string" then return end
 
-    -- Skip our own messages
-    local me = UnitName("player")
-    local meRealm = me .. "-" .. GetNormalizedRealmName()
+    -- Skip our own messages. A name or realm that can't be read yet skips
+    -- the message instead of throwing on the concatenation (audit, #1).
+    local me, realm = UnitName("player"), GetNormalizedRealmName()
+    if type(me) ~= "string" or type(realm) ~= "string" then return end
+    local meRealm = me .. "-" .. realm
     if sender == me or sender == meRealm then return end
 
     -- Reassemble AceComm framing
@@ -402,7 +426,7 @@ local function OnNWBAddonMessage(message, distribution, sender)
     if not deserialized then return end
 
     -- Extract layer info
-    ProcessNWBMessage(deserialized, sender)
+    ProcessNWBMessage(deserialized, sender, realm)
 end
 
 -- ******************************** Titan Plugin Functions *******************
