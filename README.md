@@ -2,6 +2,10 @@
 
 TitanLayer is a lightweight Titan Panel plugin that displays the layer you have observed on a layered World of Warcraft realm. Version 1.2.0 supports **World of Warcraft: Forever** (`Interface 16001`).
 
+![The TitanLayer button on Titan Panel, with its tooltip](https://raw.githubusercontent.com/Spotnick2/TitanLayer/main/docs/screenshots/titanlayer-tooltip.png)
+
+*The TitanLayer button and its tooltip, on TBC Anniversary.*
+
 ## Install
 
 Download the latest release, then extract the `TitanLayer` folder to your client's `Interface/AddOns` directory. Install and enable Titan Panel as well; it is a required dependency.
