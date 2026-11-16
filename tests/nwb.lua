@@ -28,6 +28,7 @@ local clock, now, map = 10000, 1000, 10
 local guids, secret, button, scheduled, chat = {}, {}, nil, {}, {}
 local settings = { ScanNameplates = false, AnnounceChannel = "PRINT", PreferNWB = false }
 local realm = "TestRealm"
+function GetBuildInfo() return "1.60.1", "70938", "", 16001 end
 function issecretvalue(v) return v == secret end
 function UnitGUID(unit) return guids[unit] end
 function UnitName() return "Me" end
