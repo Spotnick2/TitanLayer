@@ -12,10 +12,19 @@ TitanLayer reads the zone identifier in a creature's GUID when you target or mou
 
 This number is local to your sightings, not an official server-wide layer number. Seeing another identifier can renumber a layer you already know. Nameplates can confirm an identifier already known on the current map, but they do not discover new ones: nearby nameplates can belong to a different map across a zone border. Detection is skipped on taxis and inside instances.
 
+**On WoW Forever** the layer is a different part of the GUID: the server identifier, not the zone identifier. Players on the same layer see different zone identifiers there, and they change when the world refreshes (measured on live Forever by the LayerSwap addon). There TitanLayer:
+
+- reads target, mouseover and nameplate NPCs, and shows a layer once two NPCs agree (three of the last five to switch to another layer, so a pair of NPCs wandering in from the next zone can't flip it);
+- ranks identifiers per zone, so caves and buildings keep your layer;
+- shows `?` when the game moves you to another layer (a layer swap or a world refresh) and reads the NPCs around you again a few seconds later; joining or leaving a group alone changes nothing;
+- forgot, once, the sightings saved before this change (they were zone identifiers).
+
+Totems, guardians and other player-controlled NPCs never count, on any client: they carry the layer they were summoned on.
+
 ## Features
 
 - Show the current observed layer on the Titan Panel bar.
-- Detect layers from target and mouseover NPCs; optionally scan nameplates to confirm known layers.
+- Detect layers from target and mouseover NPCs; optionally scan nameplates to confirm known layers (on WoW Forever, nameplates count like any NPC).
 - Left-click to announce the layer in say, party, or guild chat, or print it only to your chat window. Local print is the default; choose a channel from the right-click menu.
 - Show the current layer and known identifiers for the current map in the tooltip. When NovaWorldBuffs guild messages are available, the tooltip shows their reported layer distribution instead.
 - Save sightings by realm and map. They expire two hours after their last sighting.
@@ -28,7 +37,7 @@ This number is local to your sightings, not an official server-wide layer number
 | `/titanlayer` or `/tlayer` | Print the current reading and listener status. |
 | `/titanlayer reset` or `/tlayer reset` | Clear saved sightings for the current realm and the in-memory NovaWorldBuffs reports. |
 
-Right-click the TitanLayer button to choose the announcement channel, show the GUID zone identifier, prefer NovaWorldBuffs data, toggle nameplate scanning, or reset layer data.
+Right-click the TitanLayer button to choose the announcement channel, show the GUID identifier (the zone identifier, or the layer identifier on WoW Forever), prefer NovaWorldBuffs data, toggle nameplate scanning, or reset layer data.
 
 ## Compatibility notes
 
