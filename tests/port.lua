@@ -172,6 +172,40 @@ is("?", "one vote per zone")
 plate(2, npc(4500))
 is("1", "two in this zone")
 
+-- Codex review on #4: back on a map after one where nothing was read, its
+-- creatures vote again.
+guids = {}
+event("ZONE_CHANGED_NEW_AREA")
+local a1, a2 = npc(4600), npc(4600)
+plate(3, a1); plate(4, a2)
+local here = layer()
+assert(here ~= "?", "baseline: known on map 12")
+map, guids = 13, {}
+event("ZONE_CHANGED_INDOORS")
+is("?", "another map, nothing to read")
+map, guids = 12, { nameplate3 = a1, nameplate4 = a2 }
+event("ZONE_CHANGED_INDOORS")
+is(here, "back on map 12: the same creatures vote again")
+
+-- ...and a second move keeps the first move's creatures out until their own
+-- 10 s are up, even when they're out of view at the second one.
+guids = {}
+event("ZONE_CHANGED_NEW_AREA")
+local o1, o2 = npc(4700), npc(4700)
+plate(5, o1); plate(6, o2)
+assert(layer() ~= "?", "baseline: known")
+guids, scheduled = {}, {}
+event("SHARD_TRANSFER")
+now = now + 3
+event("SHARD_TRANSFER")
+now = now + 1
+plate(5, o1); plate(6, o2)
+is("?", "4 s after the first move: its creatures still don't vote")
+now = now + 7
+plate(5, o1); plate(6, o2)
+assert(layer() ~= "?", "11 s after the first move: they vote again")
+guids, scheduled = {}, {}
+
 SlashCmdList.TITANLAYER("reset")
 is("?", "reset: unknown")
 assert(next(saved()) == nil, "reset left saved sightings")

@@ -35,7 +35,7 @@ local VOTES = 5              -- Forever: the last votes kept
 local STALE = 10             -- Forever: seconds the creatures of the layer just left don't vote
 local ZONE_MAP = 3           -- Enum.UIMapType.Zone
 local votes, voted, votesMap = {}, {}, nil
-local stale = { untilAt = nil, guid = {} }
+local stale = {}             -- Forever: [guid] = GetTime() until which it doesn't vote
 
 -- Companion/pet creature NPC IDs to ignore (common ones that travel with the player)
 local ignoredCreatures = {}
@@ -103,7 +103,9 @@ end
 local function SelectMap(mapID)
     if mapID == currentMapID then return end
     currentMapID = mapID
-    currentLayerID = 0
+    -- A new map: its own layer and its own votes, even when no creature was
+    -- read on the map left (back on a map, its creatures vote again).
+    ForgetCurrent()
     knownLayers = mapID and realmMaps[mapID] or {}
     RebuildSortedLayers()
 end
@@ -174,7 +176,7 @@ end
 --- Forever: a creature's vote. True when it tells the current layer, or
 --- enough creatures now agree on a new one.
 local function Vote(layerID, guid, mapID)
-    if stale.untilAt and GetTime() < stale.untilAt and stale.guid[guid] then return false end
+    if stale[guid] and GetTime() < stale[guid] then return false end
     if votesMap ~= mapID then ForgetCurrent(); votesMap = mapID end
     -- The current layer seen again stays fresh, even from a creature that voted.
     local isCurrent = layerID == currentLayerID
@@ -660,18 +662,21 @@ local function OnEvent(self, event, ...)
     elseif event == "SHARD_TRANSFER" then
         -- Forever: the game moved us. Every creature that voted, and every one
         -- in view now, is the old layer's for STALE seconds (their nameplates
-        -- linger); then what's on screen is read again.
-        local guids = {}
-        for guid in pairs(voted) do guids[guid] = true end
+        -- linger); then what's on screen is read again. Creatures set aside by
+        -- an earlier move keep their own expiry.
+        local t = GetTime()
+        for guid, untilAt in pairs(stale) do
+            if untilAt <= t then stale[guid] = nil end
+        end
+        for guid in pairs(voted) do stale[guid] = t + STALE end
         ForgetCurrent()
         local function add(unit)
             local guid = Plain(UnitGUID(unit))
-            if type(guid) == "string" then guids[guid] = true end
+            if type(guid) == "string" then stale[guid] = t + STALE end
         end
         add("target")
         add("mouseover")
         for i = 1, 40 do add("nameplate" .. i) end
-        stale.untilAt, stale.guid = GetTime() + STALE, guids
         TitanPanelButton_UpdateButton(TITAN_LAYER_ID)
         for _, delay in ipairs({ 2, 5, STALE + 2 }) do
             C_Timer.After(delay, function()
