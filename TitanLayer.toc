@@ -1,6 +1,6 @@
 ## Interface: 16001, 120001, 120000, 110207, 50503, 40402, 20505, 11508
-## Title: Titan Panel [|cffeda55fLayer|r] |cff00aa001.1.1|r
-## Version: 1.1.1
+## Title: Titan Panel [|cffeda55fLayer|r] |cff00aa001.2.0|r
+## Version: 1.2.0
 ## IconTexture: Interface\Icons\INV_Misc_Map_01
 ## Notes: Displays your observed layer on Titan Panel using NPC GUIDs, with optional NovaWorldBuffs guild reports.
 ## Author: Spotnick

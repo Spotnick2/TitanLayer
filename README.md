@@ -1,6 +1,6 @@
 # TitanLayer
 
-TitanLayer is a lightweight Titan Panel plugin that displays the layer you have observed on a layered World of Warcraft realm. Version 1.1.1 supports **World of Warcraft: Forever** (`Interface 16001`).
+TitanLayer is a lightweight Titan Panel plugin that displays the layer you have observed on a layered World of Warcraft realm. Version 1.2.0 supports **World of Warcraft: Forever** (`Interface 16001`).
 
 ## Install
 
@@ -45,4 +45,6 @@ The TOC also lists interface numbers for several other WoW clients. A realm must
 
 The NovaWorldBuffs listener is bounded: a guild message over 4 KB is ignored before it is decoded (a layer report is far smaller; NovaWorldBuffs' large data broadcasts carry nothing TitanLayer reads), a half-received message is forgotten after a minute, and only a whole number from 0 to 50 counts as a layer. `docs/AUDIT.md` has the audit; `tests/nwb.lua` runs it offline.
 
-Version 1.1.0 replaces the older flat saved-sighting list with realm-and-map storage. Older sightings are cleared on upgrade because they cannot be assigned safely to a map. The Forever port passed Lua 5.1 syntax and offline behavior checks, but it has not been verified in the Forever client.
+Version 1.1.0 replaces the older flat saved-sighting list with realm-and-map storage. Older sightings are cleared on upgrade because they cannot be assigned safely to a map. On WoW Forever, version 1.2.0 clears saved sightings once more, because those were zone identifiers, not layers; other clients keep theirs.
+
+The Forever detection passes offline tests, but it has not yet been checked in the Forever client. If the layer it shows disagrees with what you see in game, please [open an issue](https://github.com/Spotnick2/TitanLayer/issues).
