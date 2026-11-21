@@ -1,6 +1,6 @@
 # TitanLayer
 
-TitanLayer is a lightweight Titan Panel plugin that displays the layer you have observed on a layered World of Warcraft realm. Version 1.2.0 supports **World of Warcraft: Forever** (`Interface 16001`).
+TitanLayer is a lightweight Titan Panel plugin that displays the layer you have observed on a layered World of Warcraft realm. On **World of Warcraft: Forever** (`Interface 16001`), it can no longer detect layers since a server update on 20 November 2026; see below.
 
 ![The TitanLayer button on Titan Panel, with its tooltip](https://raw.githubusercontent.com/Spotnick2/TitanLayer/main/docs/screenshots/titanlayer-tooltip.png)
 
@@ -16,19 +16,14 @@ TitanLayer reads the zone identifier in a creature's GUID when you target or mou
 
 This number is local to your sightings, not an official server-wide layer number. Seeing another identifier can renumber a layer you already know. Nameplates can confirm an identifier already known on the current map, but they do not discover new ones: nearby nameplates can belong to a different map across a zone border. Detection is skipped on taxis and inside instances.
 
-**On WoW Forever** the layer is a different part of the GUID: the server identifier, not the zone identifier. Players on the same layer see different zone identifiers there, and they change when the world refreshes (measured on live Forever by the LayerSwap addon). There TitanLayer:
-
-- reads target, mouseover and nameplate NPCs, and shows a layer once two NPCs agree (three of the last five to switch to another layer, so a pair of NPCs wandering in from the next zone can't flip it);
-- ranks identifiers per zone, so caves and buildings keep your layer;
-- shows `?` when the game moves you to another layer (a layer swap or a world refresh) and reads the NPCs around you again a few seconds later; joining or leaving a group alone changes nothing;
-- forgot, once, the sightings saved before this change (they were zone identifiers).
+**On WoW Forever, layer detection is off since version 1.3.0.** A server update on 20 November 2026 stopped NPC GUIDs from revealing the layer, and Blizzard announced the same day that it would disable layering addons. Seven NPCs read together in one zone, two of them side by side, gave seven different values in both GUID fields that ever held one: the server field and the zone field (measured on build 1.60.1.71037). TitanLayer 1.2.0 read the GUID's server field there; nothing replaces it. On Forever the bar shows `off`, the tooltip explains why, and TitanLayer reads no NPCs, saves nothing and doesn't listen to NovaWorldBuffs. Its saved sightings are cleared.
 
 Totems, guardians and other player-controlled NPCs never count, on any client: they carry the layer they were summoned on.
 
 ## Features
 
 - Show the current observed layer on the Titan Panel bar.
-- Detect layers from target and mouseover NPCs; optionally scan nameplates to confirm known layers (on WoW Forever, nameplates count like any NPC).
+- Detect layers from target and mouseover NPCs; optionally scan nameplates to confirm known layers.
 - Left-click to announce the layer in say, party, or guild chat, or print it only to your chat window. Local print is the default; choose a channel from the right-click menu.
 - Show the current layer and known identifiers for the current map in the tooltip. When NovaWorldBuffs guild messages are available, the tooltip shows their reported layer distribution instead.
 - Save sightings by realm and map. They expire two hours after their last sighting.
@@ -41,7 +36,9 @@ Totems, guardians and other player-controlled NPCs never count, on any client: t
 | `/titanlayer` or `/tlayer` | Print the current reading and listener status. |
 | `/titanlayer reset` or `/tlayer reset` | Clear saved sightings for the current realm and the in-memory NovaWorldBuffs reports. |
 
-Right-click the TitanLayer button to choose the announcement channel, show the GUID identifier (the zone identifier, or the layer identifier on WoW Forever), prefer NovaWorldBuffs data, toggle nameplate scanning, or reset layer data.
+Right-click the TitanLayer button to choose the announcement channel, show the GUID zone identifier, prefer NovaWorldBuffs data, toggle nameplate scanning, or reset layer data.
+
+**On WoW Forever** none of this applies: `/titanlayer`, `/titanlayer reset` and a left-click only print why detection is off, and the right-click menu holds just Titan Panel's own display options.
 
 ## Compatibility notes
 
@@ -49,6 +46,4 @@ The TOC also lists interface numbers for several other WoW clients. A realm must
 
 The NovaWorldBuffs listener is bounded: a guild message over 4 KB is ignored before it is decoded (a layer report is far smaller; NovaWorldBuffs' large data broadcasts carry nothing TitanLayer reads), a half-received message is forgotten after a minute, and only a whole number from 0 to 50 counts as a layer. `docs/AUDIT.md` has the audit; `tests/nwb.lua` runs it offline.
 
-Version 1.1.0 replaces the older flat saved-sighting list with realm-and-map storage. Older sightings are cleared on upgrade because they cannot be assigned safely to a map. On WoW Forever, version 1.2.0 clears saved sightings once more, because those were zone identifiers, not layers; other clients keep theirs.
-
-The Forever detection passes offline tests, but it has not yet been checked in the Forever client. If the layer it shows disagrees with what you see in game, please [open an issue](https://github.com/Spotnick2/TitanLayer/issues).
+Version 1.1.0 replaces the older flat saved-sighting list with realm-and-map storage. Older sightings are cleared on upgrade because they cannot be assigned safely to a map. On WoW Forever, version 1.2.0 cleared saved sightings once more, because those were zone identifiers, not layers, and version 1.3.0 clears them for good, since no layer can be read there any more; other clients keep theirs.
