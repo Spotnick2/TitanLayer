@@ -16,7 +16,9 @@ function strsplit(delim, s)
 end
 function GetBuildInfo() return "1.60.1", "71037", "", 16001 end
 function issecretvalue() return false end
-function UnitGUID(unit) return guids[unit] end
+-- Counted: on Forever no GUID is read at all (Codex on #8).
+local reads = 0
+function UnitGUID(unit) reads = reads + 1 return guids[unit] end
 function UnitPlayerControlled() return false end
 function UnitOnTaxi() return false end
 function IsInInstance() return false end
@@ -80,6 +82,7 @@ guids.mouseover = "Creature-0-6843-0-76002-5624-0000000002"
 fire("PLAYER_TARGET_CHANGED"); fire("UPDATE_MOUSEOVER_UNIT"); fire("PLAYER_ENTERING_WORLD")
 assert(text() == "off", "an NPC changed the button: " .. tostring(text()))
 assert(next(TitanLayerDB) == nil, "an NPC was saved")
+assert(reads == 0, "a GUID was read on Forever (" .. reads .. " reads)")
 
 -- The tooltip, a click and the slash command explain why.
 local tip = button.registry.tooltipTextFunction()

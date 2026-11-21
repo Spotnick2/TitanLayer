@@ -38,6 +38,8 @@ Totems, guardians and other player-controlled NPCs never count, on any client: t
 
 Right-click the TitanLayer button to choose the announcement channel, show the GUID zone identifier, prefer NovaWorldBuffs data, toggle nameplate scanning, or reset layer data.
 
+**On WoW Forever** none of this applies: `/titanlayer`, `/titanlayer reset` and a left-click only print why detection is off, and the right-click menu holds just Titan Panel's own display options.
+
 ## Compatibility notes
 
 The TOC also lists interface numbers for several other WoW clients. A realm must expose readable creature GUIDs and use layers for detection to be useful. Wrath Classic is **not** listed in the current TOC, so compatibility with it is not claimed here.
