@@ -1,14 +1,10 @@
--- WoW Forever layer detection (#3): the GUID's server field, votes, SHARD_TRANSFER.
+-- WoW Forever: no layer detection since the 2026-11-20 server hotfix (NPC
+-- GUIDs no longer tell the layer, GlassPanel #169). The button says "off",
+-- nothing is read, saved or listened to, and old sightings are dropped.
 -- Run from the addon directory: lua tests/port.lua
-local clock, now, map = 10000, 1000, 10
-local guids = {}
-local controlled = {}
-local secret = {}
-local button
-local scheduled = {}
-local settings = { ScanNameplates = true, AnnounceChannel = "PRINT" }
--- uiMapID -> { mapType, parentMapID } (absent: GetMapInfo returns nil)
-local mapInfo = {}
+local guids, button, chat = {}, nil, {}
+local settings = { ScanNameplates = true, AnnounceChannel = "PRINT", PreferNWB = true }
+local prefixes = {}
 
 function wipe(t) for k in pairs(t) do t[k] = nil end end
 function strsplit(delim, s)
@@ -18,20 +14,30 @@ function strsplit(delim, s)
     end
     return unpack(result)
 end
-function GetBuildInfo() return "1.60.1", "70938", "", 16001 end
-function issecretvalue(v) return v == secret end
+function GetBuildInfo() return "1.60.1", "71037", "", 16001 end
+function issecretvalue() return false end
 function UnitGUID(unit) return guids[unit] end
-function UnitPlayerControlled(unit) return controlled[unit] == true end
+function UnitPlayerControlled() return false end
 function UnitOnTaxi() return false end
 function IsInInstance() return false end
-function GetServerTime() return clock end
-function GetTime() return now end
-function GetRealmName() return "TestRealm" end
+function GetServerTime() return 10000 end
+function GetTime() return 1000 end
+function GetRealmName() return "" end            -- hidden since the hotfix
+function GetNormalizedRealmName() return "" end
+function UnitName() return "Zoruka", "Sumner" end
 function TitanGetVar(_, key) return settings[key] end
 function TitanPanelButton_UpdateButton() end
 function TitanPanelButton_OnShow() end
+function TitanPanelButton_OnClick() end
 function TitanUtils_GetHighlightText(s) return s end
+function TitanUtils_GetNormalText(s) return s end
+function TitanUtils_GetGreenText(s) return s end
 function TitanUtils_GetColoredText(s) return s end
+function print(...)
+    local parts = {}
+    for i = 1, select("#", ...) do parts[#parts + 1] = tostring((select(i, ...))) end
+    chat[#chat + 1] = table.concat(parts, " ")
+end
 RED_FONT_COLOR = {}
 function CreateFrame(_, name)
     local frame = { events = {}, scripts = {} }
@@ -42,171 +48,50 @@ function CreateFrame(_, name)
     if name then _G[name] = frame; button = frame end
     return frame
 end
--- C_Map.GetMapInfo(uiMapID) -> UiMapDetails { mapID, name, mapType, parentMapID, flags } (70938 dump).
-C_Map = {
-    GetBestMapForUnit = function() return map end,
-    GetMapInfo = function(id)
-        local i = mapInfo[id]
-        return i and { mapID = id, name = "map", mapType = i[1], parentMapID = i[2], flags = 0 } or nil
-    end,
-}
-C_ChatInfo = { RegisterAddonMessagePrefix = function() end }
-C_Timer = { After = function(delay, fn) scheduled[#scheduled + 1] = { delay = delay, fn = fn } end }
+C_Map = { GetBestMapForUnit = function() return 1429 end }
+C_ChatInfo = { RegisterAddonMessagePrefix = function(p) prefixes[p] = true end }
+C_Timer = { After = function() end }
 SlashCmdList = {}
+-- What the listener would need, so its absence is the addon's choice.
+local lib = {}
+LibStub = function() return lib end
 
--- A new creature on a layer, with its own spawn and its own zone field
--- (which says nothing about the layer on Forever).
-local spawn = 0
-local function npc(layer, kind)
-    spawn = spawn + 1
-    return string.format("%s-0-%d-0-%d-5624-%010X", kind or "Creature", layer, 76000 + spawn, spawn)
-end
-local function event(name, ...)
-    assert(button.events[name], "event not registered: " .. name)
-    button.scripts.OnEvent(button, name, ...)
-end
-local function layer()
-    -- The plugin's text callback is the user-visible layer value.
-    return select(2, button.registry.buttonTextFunction("Layer"))
-end
-local function is(value, what)
-    assert(layer() == value, what .. ": expected " .. value .. ", got " .. layer())
-end
-local function target(guid) guids.target = guid; event("PLAYER_TARGET_CHANGED") end
-local function plate(i, guid) guids["nameplate" .. i] = guid; event("NAME_PLATE_UNIT_ADDED", "nameplate" .. i) end
-local function saved() return TitanLayerDB.realms.TestRealm end
+local function fire(name, ...) button.scripts.OnEvent(button, name, ...) end
+local function text() return select(2, button.registry.buttonTextFunction("Layer")) end
+local function said() return chat[#chat] or "" end
 
--- Sightings saved before #3 hold zone ids: dropped once.
-TitanLayerDB = { layers = { [999] = clock }, realms = {
-    TestRealm = { [10] = { [76067] = clock } },
-} }
+-- Saved sightings: nothing to keep.
+TitanLayerDB = { v = 2, realms = { TestRealm = { [10] = { [6843] = 10000 } }, [""] = { [10] = { [5000] = 10000 } } } }
 dofile("TitanLayer.lua")
-event("ADDON_LOADED", "TitanLayer")
+fire("ADDON_LOADED", "TitanLayer")
+assert(next(TitanLayerDB) == nil, "saved sightings dropped")
+
+-- Nothing registered beyond the load events, not even the NWB prefix.
 button.scripts.OnShow(button)
-assert(TitanLayerDB.v == 2, "format stamped")
-assert(TitanLayerDB.layers == nil, "flat legacy sightings dropped")
-assert(next(saved()) == nil, "zone-id sightings dropped")
-assert(button.events.SHARD_TRANSFER, "SHARD_TRANSFER registered")
-assert(not button.events.GROUP_JOINED and not button.events.GROUP_LEFT, "a group change resets nothing")
-is("?", "unknown at first")
+for event in pairs(button.events) do
+    assert(event == "PLAYER_ENTERING_WORLD", "registered on Forever: " .. event)
+end
+assert(not prefixes.NWB, "the NWB prefix registered on Forever")
 
--- One creature isn't proof; a second that agrees is.
-saved()[10] = { [5000] = clock }
-map = 11; event("ZONE_CHANGED_NEW_AREA")
-map = 10; event("ZONE_CHANGED_NEW_AREA")   -- back in zone 10: its saved sighting is read
-target(npc(6843))
-is("?", "one creature")
-event("PLAYER_TARGET_CHANGED")
-is("?", "the same creature doesn't vote twice")
-plate(1, npc(6843))
-is("2", "two agree (5000 < 6843)")
-assert(saved()[10][6843] == clock, "sighting saved")
+-- The button says off, and two NPCs that agree (as #3 read them) change nothing.
+assert(text() == "off", "button: " .. tostring(text()))
+guids.target = "Creature-0-6843-0-76001-5624-0000000001"
+guids.mouseover = "Creature-0-6843-0-76002-5624-0000000002"
+fire("PLAYER_TARGET_CHANGED"); fire("UPDATE_MOUSEOVER_UNIT"); fire("PLAYER_ENTERING_WORLD")
+assert(text() == "off", "an NPC changed the button: " .. tostring(text()))
+assert(next(TitanLayerDB) == nil, "an NPC was saved")
 
--- Changing a known layer takes 3 of the last 5.
-plate(2, npc(4500))
-plate(3, npc(4500))
-is("2", "two for another layer: kept")
-plate(4, npc(4500))
-is("1", "three of five: changed")
-
--- The same creature seen again keeps the layer fresh (a layer seen all along never expires).
-local seenAgain = guids.nameplate4
-clock = clock + 7000
-plate(4, seenAgain)
-assert(saved()[10][4500] == clock, "a creature that already voted refreshes the sighting")
-clock = clock + 300
-is("1", "still known 2 h after the first sighting")
-
--- Totems and guardians don't vote; vehicles do.
-event("UNIT_PHASE", "player")
-is("?", "own phase change: unknown")
-controlled.target = true
-target(npc(4500))
-plate(5, npc(4500))
-is("?", "a player-controlled creature doesn't vote")
-controlled.target = nil
-target(npc(4500, "Vehicle"))
-is("1", "a vehicle votes")
-guids.target = secret
-event("PLAYER_TARGET_CHANGED")
-is("1", "a secret GUID changes nothing")
-
--- SHARD_TRANSFER: the game moved us. Creatures that voted before, even with
--- no unit token at the move, and those in view don't vote for 10 s.
-local old1, old2 = npc(4500), npc(4500)
-plate(6, old1); plate(7, old2)
-guids = { target = npc(4500) }
-scheduled = {}
-event("SHARD_TRANSFER")
-is("?", "moved: unknown")
-assert(#scheduled == 3, "three looks scheduled")
-now = now + 1
-plate(6, old1); plate(7, old2)
-event("PLAYER_TARGET_CHANGED")
-is("?", "old creatures back within 10 s: no vote")
-plate(8, npc(7000)); plate(9, npc(7000))
-is("2", "two creatures of the new layer (4500 < 7000; 5000 and 6843 expired)")
--- After 10 s the units in view vote again: the last look reads them.
-event("UNIT_PHASE", "player")
-now = now + 11
-for _, s in ipairs(scheduled) do if s.delay > 10 then s.fn() end end
-is("1", "the last look: three old creatures outvote two")
-
--- Layers are a zone's: a building's map inside the zone keeps the layer.
-mapInfo = { [10] = { 3, 1 }, [1] = { 2, 0 }, [21] = { 5, 20 }, [20] = { 4, 10 } }
-map = 21
-event("ZONE_CHANGED_INDOORS")
-is("1", "a micro map inside the zone: kept")
-plate(10, npc(4500))
-assert(saved()[21] == nil, "filed under the zone, not the building")
-
--- Another zone: unknown; votes cast in one zone don't count in the next.
-map = 11
-guids = {}
-event("ZONE_CHANGED_NEW_AREA")
-is("?", "new zone: unknown")
-target(npc(4500))
-map = 12
-plate(1, npc(4500))
-is("?", "one vote per zone")
-plate(2, npc(4500))
-is("1", "two in this zone")
-
--- Codex review on #4: back on a map after one where nothing was read, its
--- creatures vote again.
-guids = {}
-event("ZONE_CHANGED_NEW_AREA")
-local a1, a2 = npc(4600), npc(4600)
-plate(3, a1); plate(4, a2)
-local here = layer()
-assert(here ~= "?", "baseline: known on map 12")
-map, guids = 13, {}
-event("ZONE_CHANGED_INDOORS")
-is("?", "another map, nothing to read")
-map, guids = 12, { nameplate3 = a1, nameplate4 = a2 }
-event("ZONE_CHANGED_INDOORS")
-is(here, "back on map 12: the same creatures vote again")
-
--- ...and a second move keeps the first move's creatures out until their own
--- 10 s are up, even when they're out of view at the second one.
-guids = {}
-event("ZONE_CHANGED_NEW_AREA")
-local o1, o2 = npc(4700), npc(4700)
-plate(5, o1); plate(6, o2)
-assert(layer() ~= "?", "baseline: known")
-guids, scheduled = {}, {}
-event("SHARD_TRANSFER")
-now = now + 3
-event("SHARD_TRANSFER")
-now = now + 1
-plate(5, o1); plate(6, o2)
-is("?", "4 s after the first move: its creatures still don't vote")
-now = now + 7
-plate(5, o1); plate(6, o2)
-assert(layer() ~= "?", "11 s after the first move: they vote again")
-guids, scheduled = {}, {}
-
+-- The tooltip, a click and the slash command explain why.
+local tip = button.registry.tooltipTextFunction()
+assert(tip:find("off on WoW Forever", 1, true) and tip:find("20 November 2026", 1, true), "tooltip: " .. tip)
+assert(not tip:find("Target", 1, true), "the tooltip still asks for a target")
+button.scripts.OnClick(button, "LeftButton")
+assert(said():find("no longer", 1, true), "click: " .. said())
+SlashCmdList.TITANLAYER("")
+assert(said():find("no longer", 1, true), "slash: " .. said())
 SlashCmdList.TITANLAYER("reset")
-is("?", "reset: unknown")
-assert(next(saved()) == nil, "reset left saved sightings")
+assert(said():find("no longer", 1, true), "slash reset: " .. said())
+assert(button.registry.notes:find("20 November 2026", 1, true), "notes")
+
+print = function(...) io.stdout:write(table.concat({ ... }, " "), "\n") end
 print("TitanLayer Forever checks passed")

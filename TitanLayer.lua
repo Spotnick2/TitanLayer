@@ -5,11 +5,14 @@
 -- * Detects layers via NPC GUID parsing (same technique as NovaWorldBuffs).
 -- * Can also read from NWB if it's loaded, for seamless transition.
 -- *
--- * WoW Forever (#3, measured on live by LayerSwap, 9 Nov 2026): the layer is
--- * the GUID's server field ("Creature-0-SERVER-..."), not the zone field the
--- * Classic clients use (it differs between two players on one layer there),
--- * and the game fires SHARD_TRANSFER when it moves a player. One creature is
--- * no proof: each votes once, 2 of the last 5 set a layer, 3 change it.
+-- * WoW Forever: no detection since the 2026-11-20 server hotfix. Blizzard
+-- * announced that day that layering addons would be disabled through API
+-- * changes. Measured on 1.60.1.71037 (GlassPanel #169, LayerProbe): seven
+-- * NPCs read together, two of them side by side, gave seven different server
+-- * fields and seven zone fields, so no GUID field tells the layer any more
+-- * (#3 had read the server field). The realm is hidden too (GetRealmName()
+-- * and GetNormalizedRealmName() are ""). On Forever the button says so and
+-- * nothing is read, saved or listened to.
 -- **************************************************************************
 
 -- ******************************** Constants *******************************
@@ -17,7 +20,7 @@ local TITAN_LAYER_ID = "Layer"
 local TITAN_BUTTON = "TitanPanel" .. TITAN_LAYER_ID .. "Button"
 
 local ADDON_NAME = "TitanLayer"
-local VERSION = "1.2.0"
+local VERSION = "1.3.0"
 
 -- ******************************** Variables *******************************
 local currentLayerID = 0
@@ -27,15 +30,17 @@ local sortedLayers = {}      -- sorted zoneIDs on that map
 local realmMaps = {}         -- { [uiMapID] = { [zoneID] = lastSeen } }
 local layerExpireTime = 7200 -- 2 hours, layers reset on server restarts
 
--- WoW Forever (Interface 16xxx) reads layers from another GUID field (see the header).
+-- WoW Forever (Interface 16xxx) no longer exposes the layer (see the header).
 local BUILD = select(4, GetBuildInfo())
 local FOREVER = type(BUILD) == "number" and BUILD >= 16000 and BUILD < 20000
-local FORMAT = 2             -- TitanLayerDB.v on Forever: server ids; older saves held zone ids
-local VOTES = 5              -- Forever: the last votes kept
-local STALE = 10             -- Forever: seconds the creatures of the layer just left don't vote
-local ZONE_MAP = 3           -- Enum.UIMapType.Zone
-local votes, voted, votesMap = {}, {}, nil
-local stale = {}             -- Forever: [guid] = GetTime() until which it doesn't vote
+local OFF_TEXT = "Since a server update on 20 November 2026, NPCs on WoW Forever no longer"
+    .. " reveal their layer (Blizzard announced it would disable layering addons),"
+    .. " so TitanLayer can't show it there."
+local OFF_LINES = "Since a server update on 20 November 2026,\n"
+    .. "NPCs on WoW Forever no longer reveal their layer\n"
+    .. "(Blizzard announced it would disable layering addons),\n"
+    .. "so TitanLayer can't show it there."
+local GRAY = { r = 0.6, g = 0.6, b = 0.6 }
 
 -- Companion/pet creature NPC IDs to ignore (common ones that travel with the player)
 local ignoredCreatures = {}
@@ -51,27 +56,11 @@ end
 local function LiveMap()
     local mapID = C_Map and C_Map.GetBestMapForUnit and Plain(C_Map.GetBestMapForUnit("player"))
     if type(mapID) ~= "number" then return nil end
-    if not FOREVER or not C_Map.GetMapInfo then return mapID end
-    -- Forever: a layer is a zone's, and a cave or a building has a map of its
-    -- own, so walk up to the Zone map.
-    local zoneType = Enum and Enum.UIMapType and Plain(Enum.UIMapType.Zone)
-    if type(zoneType) ~= "number" then zoneType = ZONE_MAP end
-    local m = mapID
-    for _ = 1, 6 do
-        local info = C_Map.GetMapInfo(m)
-        if type(info) ~= "table" then break end
-        local kind, up = Plain(info.mapType), Plain(info.parentMapID)
-        if type(kind) ~= "number" then break end
-        if kind == zoneType then return m end
-        if kind < zoneType or type(up) ~= "number" or up <= 0 then break end
-        m = up
-    end
     return mapID
 end
 
 local function ForgetCurrent()
     currentLayerID = 0
-    votes, voted, votesMap = {}, {}, nil
 end
 
 local function ServerTime()
@@ -103,8 +92,6 @@ end
 local function SelectMap(mapID)
     if mapID == currentMapID then return end
     currentMapID = mapID
-    -- A new map: its own layer and its own votes, even when no creature was
-    -- read on the map left (back on a map, its creatures vote again).
     ForgetCurrent()
     knownLayers = mapID and realmMaps[mapID] or {}
     RebuildSortedLayers()
@@ -143,18 +130,18 @@ end
 
 --- Parse a unit's GUID and extract its layer id.
 --- Creature GUIDs look like: "Creature-0-SERVER-INSTANCE-ZONE-NPC-SPAWN".
---- Forever: the SERVER field; Classic: the ZONE field (as NovaWorldBuffs).
+--- The ZONE field, as NovaWorldBuffs reads it. Never on Forever (the header).
 ---@param unit string
 ---@return number|nil layerID
----@return string|nil guid
 local function GetLayerIDFromUnit(unit)
+    if FOREVER then return nil end
     local guid = Plain(UnitGUID(unit))
     if type(guid) ~= "string" then
         return nil
     end
 
-    local unitType, _, serverID, _, zoneID, npcID = strsplit("-", guid)
-    if unitType ~= "Creature" and not (FOREVER and unitType == "Vehicle") then
+    local unitType, _, _, _, zoneID, npcID = strsplit("-", guid)
+    if unitType ~= "Creature" then
         return nil
     end
 
@@ -168,28 +155,9 @@ local function GetLayerIDFromUnit(unit)
         return nil
     end
 
-    local id = tonumber(FOREVER and serverID or zoneID)
+    local id = tonumber(zoneID)
     if not id or id <= 0 then return nil end
-    return id, guid
-end
-
---- Forever: a creature's vote. True when it tells the current layer, or
---- enough creatures now agree on a new one.
-local function Vote(layerID, guid, mapID)
-    if stale[guid] and GetTime() < stale[guid] then return false end
-    if votesMap ~= mapID then ForgetCurrent(); votesMap = mapID end
-    -- The current layer seen again stays fresh, even from a creature that voted.
-    local isCurrent = layerID == currentLayerID
-    if voted[guid] then return isCurrent end
-    voted[guid] = true
-    votes[#votes + 1] = layerID
-    if #votes > VOTES then table.remove(votes, 1) end
-    if isCurrent then return true end
-    local count = 0
-    for _, v in ipairs(votes) do
-        if v == layerID then count = count + 1 end
-    end
-    return count >= (currentLayerID > 0 and 3 or 2)
+    return id
 end
 
 --- Process a unit to detect/update layer info.
@@ -201,7 +169,7 @@ local function ProcessUnit(unit, confirmOnly)
         return
     end
 
-    local zoneID, guid = GetLayerIDFromUnit(unit)
+    local zoneID = GetLayerIDFromUnit(unit)
     local mapID = LiveMap()
     local now = ServerTime()
     if not zoneID or not mapID or not now then
@@ -210,10 +178,7 @@ local function ProcessUnit(unit, confirmOnly)
 
     SelectMap(mapID)
     local wasKnown = knownLayers[zoneID] and now - knownLayers[zoneID] < layerExpireTime
-    if FOREVER then
-        -- Votes replace the zone-id rules below (nameplates vote too).
-        if not Vote(zoneID, guid, mapID) then return end
-    elseif not wasKnown then
+    if not wasKnown then
         -- Nameplates can belong to the map across a border. A target or
         -- mouseover can add a new ID unless another map already owns it.
         if confirmOnly then return end
@@ -243,15 +208,7 @@ local function ProcessUnit(unit, confirmOnly)
 end
 
 local function RescanUnits()
-    if FOREVER then
-        -- Every creature in view votes.
-        ProcessUnit("target")
-        ProcessUnit("mouseover")
-        if TitanGetVar(TITAN_LAYER_ID, "ScanNameplates") then
-            for i = 1, 40 do ProcessUnit("nameplate" .. i) end
-        end
-        return
-    end
+    if FOREVER then return end
     if ProcessUnit("target") or ProcessUnit("mouseover") then return end
     if TitanGetVar(TITAN_LAYER_ID, "ScanNameplates") then
         for i = 1, 40 do
@@ -263,9 +220,9 @@ end
 local function LoadSavedLayers()
     local db = type(TitanLayerDB) == "table" and TitanLayerDB or {}
     if FOREVER then
-        -- Sightings saved before #3 are zone ids, not Forever layers.
-        if db.v ~= FORMAT then db.realms = nil end
-        db.v = FORMAT
+        -- Nothing to keep: no layer can be read there any more (the header).
+        TitanLayerDB = {}
+        return
     end
     local saved = type(db.realms) == "table" and db.realms or {}
     local realm = Plain(GetRealmName())
@@ -520,6 +477,9 @@ end
 ---@return string label
 ---@return string value
 local function GetButtonText(id)
+    if FOREVER then
+        return "Layer: ", TitanUtils_GetColoredText("off", GRAY)
+    end
     local layerNum = CurrentLayer()
     local useNWB = TitanGetVar(TITAN_LAYER_ID, "PreferNWB")
 
@@ -552,6 +512,10 @@ end
 ---Generate tooltip text
 ---@return string
 local function GetTooltipText()
+    if FOREVER then
+        return TitanUtils_GetColoredText("Layer detection is off on WoW Forever.", {r = 1, g = 0.5, b = 0})
+            .. "\n\n" .. TitanUtils_GetNormalText(OFF_LINES)
+    end
     local text = ""
 
     -- Current layer
@@ -577,7 +541,7 @@ local function GetTooltipText()
 
     -- Zone ID info
     if TitanGetVar(TITAN_LAYER_ID, "ShowZoneID") and CurrentLayer() > 0 then
-        text = text .. "\n" .. TitanUtils_GetNormalText(FOREVER and "Layer ID: " or "Zone ID: ")
+        text = text .. "\n" .. TitanUtils_GetNormalText("Zone ID: ")
             .. TitanUtils_GetHighlightText(tostring(currentLayerID))
     end
 
@@ -624,9 +588,7 @@ local function GetTooltipText()
     end
 
     -- Hint
-    text = text .. "\n\n" .. TitanUtils_GetGreenText(FOREVER
-        and "Target or mouse over NPCs to detect your layer (two must agree)."
-        or "Target any NPC to detect your layer.")
+    text = text .. "\n\n" .. TitanUtils_GetGreenText("Target any NPC to detect your layer.")
     text = text .. "\n|cff989898GUID layer numbers are local to your sightings on this map.|r"
     text = text .. "\n" .. TitanUtils_GetGreenText("Left-click to announce layer in chat.")
 
@@ -658,32 +620,6 @@ local function OnEvent(self, event, ...)
     elseif event == "NAME_PLATE_UNIT_ADDED" then
         local unitID = ...
         ProcessUnit(unitID, true)
-
-    elseif event == "SHARD_TRANSFER" then
-        -- Forever: the game moved us. Every creature that voted, and every one
-        -- in view now, is the old layer's for STALE seconds (their nameplates
-        -- linger); then what's on screen is read again. Creatures set aside by
-        -- an earlier move keep their own expiry.
-        local t = GetTime()
-        for guid, untilAt in pairs(stale) do
-            if untilAt <= t then stale[guid] = nil end
-        end
-        for guid in pairs(voted) do stale[guid] = t + STALE end
-        ForgetCurrent()
-        local function add(unit)
-            local guid = Plain(UnitGUID(unit))
-            if type(guid) == "string" then stale[guid] = t + STALE end
-        end
-        add("target")
-        add("mouseover")
-        for i = 1, 40 do add("nameplate" .. i) end
-        TitanPanelButton_UpdateButton(TITAN_LAYER_ID)
-        for _, delay in ipairs({ 2, 5, STALE + 2 }) do
-            C_Timer.After(delay, function()
-                RescanUnits()
-                TitanPanelButton_UpdateButton(TITAN_LAYER_ID)
-            end)
-        end
 
     elseif event == "GROUP_JOINED" or event == "GROUP_LEFT" then
         -- Classic: the layer hop can occur after the group event.
@@ -730,6 +666,10 @@ end
 ---@param button string
 local function OnClick(self, button)
     if button == "LeftButton" then
+        if FOREVER then
+            print("|cff33ff99TitanLayer:|r " .. OFF_TEXT)
+            return
+        end
         local layerNum = CurrentLayer()
         local useNWB = TitanGetVar(TITAN_LAYER_ID, "PreferNWB")
         if useNWB then
@@ -776,6 +716,12 @@ local function PrepareMenu()
 
     if level == 1 then
         TitanPanelRightClickMenu_AddTitle(TitanPlugins[TITAN_LAYER_ID].menuText)
+        if FOREVER then
+            -- Nothing to configure: no layer is read there (the header).
+            TitanPanelRightClickMenu_AddSpacer()
+            TitanPanelRightClickMenu_AddControlVars(TITAN_LAYER_ID)
+            return
+        end
 
         -- Announce channel submenu
         TitanPanelRightClickMenu_AddSpacer()
@@ -802,7 +748,7 @@ local function PrepareMenu()
 
         -- Show zone ID option
         info = {}
-        info.text = FOREVER and "Show Layer ID in Tooltip" or "Show Zone ID in Tooltip"
+        info.text = "Show Zone ID in Tooltip"
         info.func = function()
             TitanToggleVar(TITAN_LAYER_ID, "ShowZoneID")
         end
@@ -870,9 +816,9 @@ local function OnLoad(self)
         tooltipTextFunction = GetTooltipText,
         icon = "Interface\\Icons\\INV_Misc_Map_01",
         iconWidth = 16,
-        notes = "Displays your current server layer on Titan Panel.\n"
-            .. (FOREVER and "- Detects layers from NPC GUIDs (target, mouseover, nameplates); two NPCs must agree.\n"
-                or "- Detects layers from target and mouseover NPC GUIDs; nameplates confirm known IDs.\n")
+        notes = FOREVER and ("Displays your current server layer on Titan Panel.\n" .. OFF_LINES)
+            or "Displays your current server layer on Titan Panel.\n"
+            .. "- Detects layers from target and mouseover NPC GUIDs; nameplates confirm known IDs.\n"
             .. "- Passively listens to NovaWorldBuffs guild comms for total layer count.\n"
             .. "- Shows Layer X/Y when using NWB's layer number and guild data is available.\n"
             .. "- Left-click to announce your current layer in chat.\n"
@@ -899,7 +845,7 @@ local function OnLoad(self)
     }
 
     -- Register NWB addon message prefix for passive listening
-    if nwbListenerReady then
+    if nwbListenerReady and not FOREVER then
         C_ChatInfo.RegisterAddonMessagePrefix(NWB_PREFIX)
     end
 
@@ -910,14 +856,15 @@ end
 ---Show handler
 ---@param self Button
 local function OnShow(self)
+    if FOREVER then
+        -- No NPC, zone or guild message tells the layer there (the header).
+        TitanPanelButton_UpdateButton(TITAN_LAYER_ID)
+        return
+    end
     self:RegisterEvent("PLAYER_TARGET_CHANGED")
     self:RegisterEvent("UPDATE_MOUSEOVER_UNIT")
-    if FOREVER then
-        self:RegisterEvent("SHARD_TRANSFER")
-    else
-        self:RegisterEvent("GROUP_JOINED")
-        self:RegisterEvent("GROUP_LEFT")
-    end
+    self:RegisterEvent("GROUP_JOINED")
+    self:RegisterEvent("GROUP_LEFT")
     self:RegisterEvent("ZONE_CHANGED_NEW_AREA")
     self:RegisterEvent("ZONE_CHANGED")
     self:RegisterEvent("ZONE_CHANGED_INDOORS")
@@ -941,12 +888,8 @@ end
 local function OnHide(self)
     self:UnregisterEvent("PLAYER_TARGET_CHANGED")
     self:UnregisterEvent("UPDATE_MOUSEOVER_UNIT")
-    if FOREVER then
-        self:UnregisterEvent("SHARD_TRANSFER")
-    else
-        self:UnregisterEvent("GROUP_JOINED")
-        self:UnregisterEvent("GROUP_LEFT")
-    end
+    self:UnregisterEvent("GROUP_JOINED")
+    self:UnregisterEvent("GROUP_LEFT")
     self:UnregisterEvent("ZONE_CHANGED_NEW_AREA")
     self:UnregisterEvent("ZONE_CHANGED")
     self:UnregisterEvent("ZONE_CHANGED_INDOORS")
@@ -993,7 +936,9 @@ SLASH_TITANLAYER1 = "/titanlayer"
 SLASH_TITANLAYER2 = "/tlayer"
 SlashCmdList["TITANLAYER"] = function(msg)
     msg = string.lower(msg or "")
-    if msg == "reset" then
+    if FOREVER then
+        print("|cff33ff99TitanLayer:|r " .. OFF_TEXT)
+    elseif msg == "reset" then
         ResetLayers()
         print("|cff33ff99TitanLayer:|r This realm's layer data has been reset.")
     else
@@ -1004,7 +949,7 @@ SlashCmdList["TITANLAYER"] = function(msg)
                 display = display .. " of " .. nwbMaxLayer
             end
             print("|cff33ff99TitanLayer:|r You are on " .. display
-                .. (currentLayerID > 0 and ((FOREVER and " (Layer ID: " or " (Zone ID: ") .. currentLayerID .. ")") or ""))
+                .. (currentLayerID > 0 and (" (Zone ID: " .. currentLayerID .. ")") or ""))
         else
             print("|cff33ff99TitanLayer:|r Layer not yet detected. Target any NPC!")
         end
